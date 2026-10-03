@@ -1,4 +1,4 @@
-name: Build English Journey APK
+name: Build APK
 
 on:
   workflow_dispatch:
@@ -16,54 +16,81 @@ jobs:
 
       - name: Extract ZIP
         run: |
-          mkdir -p project
-          unzip -q English-Journey-Mentor-GitHub-Ready.zip -d project
-          echo "Extracted project:"
-          find project -maxdepth 3 -type f | head -100
+          mkdir -p extracted
+          unzip -q "English-Journey-Mentor-GitHub-Ready.zip" -d extracted
 
       - name: Find project folder
+        id: project
         run: |
-          PROJECT_DIR=$(find project -type f -name "app.json" -printf '%h\n' | head -1)
-          echo "PROJECT_DIR=$PROJECT_DIR" >> $GITHUB_ENV
-          echo "Project found at: $PROJECT_DIR"
+          PROJECT=$(find extracted -name package.json -not -path "*/node_modules/*" -printf '%h\n' | head -1)
+          if [ -z "$PROJECT" ]; then
+            echo "ERROR: package.json not found"
+            exit 1
+          fi
+          echo "PROJECT=$PROJECT" >> "$GITHUB_OUTPUT"
+          echo "Project folder: $PROJECT"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: pnpm
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 10
+          version: 9
 
       - name: Install dependencies
-        working-directory: project/English-Journey-Mentor
+        working-directory: ${{ steps.project.outputs.PROJECT }}
         run: pnpm install --no-frozen-lockfile
 
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 17
-
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        run: |
+          echo "ANDROID_HOME=/usr/local/lib/android/sdk" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=/usr/local/lib/android/sdk" >> $GITHUB_ENV
+          echo "/usr/local/lib/android/sdk/platform-tools" >> $GITHUB_PATH
+          echo "/usr/local/lib/android/sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
+
+          yes | sdkmanager --licenses >/dev/null || true
+
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
 
       - name: Generate Android project
-        working-directory: project/English-Journey-Mentor/artifacts/english-journey
+        working-directory: ${{ steps.project.outputs.PROJECT }}
         run: |
-          pnpm exec expo prebuild --platform android --no-install
+          if [ -f "scripts/build-apk.sh" ]; then
+            chmod +x scripts/build-apk.sh
+            ./scripts/build-apk.sh
+          elif [ -f "scripts/build-apk.js" ]; then
+            node scripts/build-apk.js
+          elif [ -f "BUILD-APK.md" ]; then
+            echo "BUILD-APK.md found"
+            echo "No automatic build script found."
+            exit 1
+          else
+            echo "No APK build script found."
+            exit 1
+          fi
 
-      - name: Build APK
-        working-directory: project/English-Journey-Mentor/artifacts/english-journey/android
+      - name: Find APK
+        id: apk
         run: |
-          chmod +x gradlew
-          ./gradlew assembleRelease
+          APK=$(find . -type f -name "*.apk" | head -1)
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: APK was not generated."
+            exit 1
+          fi
+
+          echo "APK found: $APK"
+          echo "APK=$APK" >> "$GITHUB_OUTPUT"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: English-Journey-APK
-          path: project/English-Journey-Mentor/artifacts/english-journey/android/app/build/outputs/apk/release/*.apk
-          if-no-files-found: error
+          path: ${{ steps.apk.outputs.APK }}
