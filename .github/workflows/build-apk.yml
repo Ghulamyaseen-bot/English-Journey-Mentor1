@@ -1,10 +1,10 @@
 name: Build Android APK
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
-  workflow_dispatch:
 
 jobs:
   build-apk:
@@ -16,7 +16,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
-      - name: Find ZIP file
+      - name: Find ZIP
         shell: bash
         run: |
           set -e
@@ -24,14 +24,14 @@ jobs:
           ZIP_FILE=$(find . -maxdepth 1 -type f -iname "*.zip" | head -n 1)
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: No ZIP file found in repository."
+            echo "ERROR: No ZIP file found."
             exit 1
           fi
 
+          echo "Found ZIP: $ZIP_FILE"
           echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
-          echo "Found: $ZIP_FILE"
 
-      - name: Extract project
+      - name: Extract ZIP
         shell: bash
         run: |
           set -e
@@ -41,18 +41,18 @@ jobs:
 
           unzip -q "$ZIP_FILE" -d extracted-project
 
-          PROJECT_DIR=$(find extracted-project -type f -name "package.json" -print -quit)
+          PACKAGE_JSON=$(find extracted-project -type f -name "package.json" -print -quit)
 
-          if [ -z "$PROJECT_DIR" ]; then
-            echo "ERROR: package.json not found inside ZIP."
+          if [ -z "$PACKAGE_JSON" ]; then
+            echo "ERROR: package.json not found."
             exit 1
           fi
 
-          PROJECT_DIR=$(dirname "$PROJECT_DIR")
+          PROJECT_DIR=$(dirname "$PACKAGE_JSON")
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-          echo "Project found at:"
+          echo "Project directory:"
           echo "$PROJECT_DIR"
 
       - name: Setup Node.js
@@ -81,17 +81,19 @@ jobs:
         uses: android-actions/setup-android@v4
         with:
           accept-android-sdk-licenses: true
-          packages: "platform-tools platforms;android-35 build-tools;35.0.0"
+          packages: |
+            platform-tools
+            platforms;android-35
+            build-tools;35.0.0
 
       - name: Verify Android SDK
         run: |
-          echo "Android SDK setup completed"
           echo "ANDROID_HOME=$ANDROID_HOME"
           echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
           command -v sdkmanager
           sdkmanager --version
 
-      - name: Install dependencies
+      - name: Install project dependencies
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           pnpm install --frozen-lockfile
@@ -99,14 +101,38 @@ jobs:
       - name: Generate Android project
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          pnpm exec expo prebuild --platform android --non-interactive
+          pnpm exec expo prebuild \
+            --platform android \
+            --non-interactive \
+            --no-install
 
-      - name: Build APK
+      - name: Install updated dependencies
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          pnpm install --no-frozen-lockfile
+
+      - name: Check Android project
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          if [ ! -f "android/gradlew" ]; then
+            echo "ERROR: Android project was not generated."
+            exit 1
+          fi
+
+          echo "Android project generated successfully."
+
+      - name: Build Release APK
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           chmod +x android/gradlew
           cd android
           ./gradlew assembleRelease --no-daemon
+
+      - name: Find APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          echo "APK files:"
+          find android -type f -name "*.apk" -print
 
       - name: Upload APK
         uses: actions/upload-artifact@v7
